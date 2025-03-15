@@ -18,30 +18,30 @@ class Node:
     parent: Parent
     begin: int
     end: int
-    support: int
-    type: bool
-    prefix: Optional[tuple]
+    support: float
+    positive: bool
 
     def __hash__(self):
         return hash((self.parent.level, self.parent.index, self.begin, self.end, self.support))
 
 def extract_first(min_support: int, transactions: list[list]):
+    transactions_len = len(transactions)
     firsts_support = dict()
     for record in transactions:
-        record_set = set(record)
+        record_set = frozenset(record)
         for item in record_set:
             firsts_support[item] = 1 + (firsts_support[item] if item in firsts_support else 0)
     ordered = sorted([ (k,v) for k,v in firsts_support.items()], key = lambda x: x[1], reverse=True)
     frequent_items = {
-        key: FrequentItem(label=key, index=index, support=support) for index, (key, support) in enumerate(ordered)
-            if support >= min_support
+        key: FrequentItem(label=key, index=index, support=support / transactions_len) for index, (key, support) in enumerate(ordered)
+            if support /transactions_len>= min_support
     }
     reverse_index = [ k for k,v in ordered ]
     return frequent_items, reverse_index
 
 def sort_records(transactions: list[list], fi: dict[FrequentItem]):
     _sorted = [
-        sorted([ fi[record].index for record in trx if record in fi ]) for trx in transactions
+        (sorted([ fi[record].index for record in frozenset(trx) if record in fi ])) for trx in transactions
     ]
     return [ s for s in _sorted if len(s) > 0 ]
 
@@ -52,18 +52,19 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
     # transactions current item
     transaction_ptrs = [0] * len(transactions)
     # the root node
-    root = Node(parent = Parent(),begin=0, end=len(transactions), support=len(transactions), type=True, prefix=None)
+    root = Node(parent = Parent(),begin=0, end=len(transactions), support=len(transactions), positive=True)
     # the levels
     levels = []
-    
+
     # the negative nodes
     negative_nodes = [] 
 
-    for current_item in range(len(fi)):
+    transactions_len = len(transactions)
 
+    for current_item in range(len(fi)):
         # the next nodes
         next_nodes = []
-        # the next negative nodes 
+        # the next negative nodes
         next_negative_nodes = []
         # use root if levels is empty, then add negative nodes
         current_nodes = (levels[-1] if len(levels) > 0 else [root]) + negative_nodes
@@ -76,7 +77,7 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
                 ptr = transaction_ptrs[tid]
                 # the actual transaction
                 trx = transactions[tid]
-                
+
                 # if we have not exhausted the transaction
                 if ptr != -1:
                     # if the elemented pointed by ptr into trx is our current_item
@@ -90,17 +91,32 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
                         tail.append(tid)
             # write back head and tail into our transaction indices list
             transaction_indices[node.begin:node.begin + len(head) + len(tail)] = head + tail
-            
-            # next parent is current node if it's a match ( True ), else the node's parent
-            next_parent = node.parent if node.type == False else Parent(len(levels) -1, index)
-            # the positive node
-            positive = Node(next_parent, node.begin, node.begin + len(head), len(head), type=True, prefix=None)
-            # the negative node
-            negative = Node(next_parent, node.begin + len(head), node.begin + len(head) + len(tail), len(tail), type=False, prefix=None)
 
-            if positive.support >= min_support:
+            # next parent is current node if it's a match ( True ), else the node's parent
+            next_parent = node.parent if node.positive == False else Parent(len(levels) -1, index)
+            # the positive node
+            positive_local_support = len(head) / (-node.begin + node.end)
+            negative_local_support = len(tail) / (-node.begin + node.end)
+
+            positive = Node(
+                parent=next_parent,
+                begin=node.begin,
+                end=node.begin + len(head),
+                support=len(head) / transactions_len,
+                positive=True
+            )
+            # the negative node
+            negative = Node(
+                parent= next_parent,
+                begin= node.begin + len(head),
+                end= node.begin + len(head) + len(tail),
+                support= len(tail) / transactions_len,
+                positive=False
+            )
+
+            if positive_local_support > min_support:
                 next_nodes.append(positive)
-            if negative.support >= min_support:
+            if negative_local_support > min_support:
                 next_negative_nodes.append(negative)
 
         # write back the next level
@@ -110,43 +126,40 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
 
     return levels
 
-def extract_fp(levels: list,*, dataset_size: float = 1.0, reverse_index: list[any] = None ):
-    item_sets = []
-    visited = set()
+def extract_fp(levels: list[list[Node]], header: dict[FrequentItem],*, dataset_size: float = 1.0, reverse_index: list[any] = None ):
+    def get_ancestors(level: int,node: Node):
+        ancestors = [[reverse_index[level]]]
+        while True:
+            level, index = node.parent.level, node.parent.index
+            if not level > -1:
+                break
+            ancestors.append([*ancestors[-1],reverse_index[level] ])
+            node = levels[level][index]
 
-    def visit(level: int, node: Node):
-        name = level if reverse_index is None else reverse_index[level]
-        if node not in visited:
-            visited.add(node)
-            if node.parent.level > 0:
-                parent = levels[node.parent.level][node.parent.index]
-                visit(node.parent.level, parent)
-                node.prefix = frozenset([*parent.prefix,name])
-            else:
-                node.prefix = frozenset([name])
-            
-            item_sets.append((float(node.support) / dataset_size, node.prefix))
-    
-    for level, nodes in reversed(list(enumerate(levels))):
-        for node in nodes:
-            visit(level, node)
-    return pd.DataFrame(data=item_sets, columns=('support', 'itemsets'))
+        return ancestors
+    frequent_items = []
+    for i, level in enumerate(levels):
+        for node in level:
+            ancestors = get_ancestors(i, node)
+            for ancestor in ancestors:
+                frequent_items.append((node.support, frozenset(ancestor)))
+    return pd.DataFrame(data=frequent_items, columns=('support','itemsets'))
 
 if __name__ == '__main__':
-    file = "/home/marco/Scrivania/uni/datamining/lab-data-mining/progetto/transactional_T10I4D100K.csv"
-    transactions = []
-    with open(file, 'r') as file:
-        for line in file:
-            trx = list(map(lambda x: int(x), line.split(',')))
-            if len(trx) > 0:
-                transactions.append(trx)
-    min_support = int(.01 * len(transactions)) 
-    f1i, reverse_index = extract_first(min_support, transactions)
-    sorted = sort_records(transactions, f1i)
-    levels = compute_lasagna(min_support, f1i, sorted)
+    from stuff import load_T10I4D100K, load_T40I10D100K, load_retail
+    #transactions = [['Milk', 'Onion', 'Nutmeg', 'Kidney Beans', 'Eggs', 'Yogurt'],
+    #       ['Dill', 'Onion', 'Nutmeg', 'Kidney Beans', 'Eggs', 'Yogurt'],
+    #       ['Milk', 'Apple', 'Kidney Beans', 'Eggs'],
+    #       ['Milk', 'Unicorn', 'Corn', 'Kidney Beans', 'Yogurt'],
+    #       ['Corn', 'Onion', 'Onion', 'Kidney Beans', 'Ice cream', 'Eggs']]
+    transactions = load_retail()
+    min_support = .01
+    header, reverse_index = extract_first(min_support, transactions)
+    sorted = sort_records(transactions, header)
+    levels = compute_lasagna(min_support, header, sorted)
     
-    print(extract_fp(levels, dataset_size=len(transactions), reverse_index = reverse_index).to_string())
-    print(sum([len(level) for level in levels]))
-    # for i,level in enumerate(levels):
-    #     for leaf in level:
-    #         print('Level {}'.format(i), leaf)
+    print(header)
+    #print(extract_fp(levels,header, dataset_size=len(transactions), reverse_index = reverse_index).to_string())
+    #for i,level in enumerate(levels):
+    #    for leaf in level:
+    #        print('Level {}'.format(i), leaf)
