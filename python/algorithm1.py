@@ -59,12 +59,14 @@ def create_buffers(transactions: list[list[int]]):
     
     np.copyto(trx_idx, np.arange(shape[0], dtype=np.int32, ))
     np.copyto(trx_ptr, np.zeros(shape[0], dtype=np.int32 ))
-    return trx_buf, trx_idx, trx_ptr, shape
+    return trx_buf, trx_idx, trx_ptr
+
+
 
 def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list[list[int]]):
-
+    num_of_frequent_1items = len(fi)
     # list of indices to transactions
-    trx_buf,trx_idx,trx_ptr, shape = create_buffers(transactions)
+    trx_buf,trx_idx,trx_ptr = create_buffers(transactions)
     # the root node
     root = Node(parent = Parent(),begin=0, end=len(transactions), support=len(transactions), positive=True)
     # the levels
@@ -74,11 +76,11 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
     negative_nodes = [] 
 
 
-    for current_item in range(len(fi)):
+    for current_item in range(num_of_frequent_1items):
         # the next nodes
-        positives = []
+        positives: list[Node] = []
         # the next negative nodes
-        negatives = []
+        negatives: list[Node] = []
         # use root if levels is empty, then add negative nodes
         current_nodes = (levels[-1] if len(levels) > 0 else [root]) + negative_nodes
         
@@ -92,18 +94,38 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
                 trx_buf,
                 trx_idx,
                 trx_ptr,
-                shape,
                 next_parent
             )
-            if positive: positives.append(positive)
-            if negative: negatives.append(negative)
+            positives.append(positive)
+            negatives.append(negative)
 
+        accept_arrays = compute_accept_array(current_item, positives, negatives)
+        
         # write back the next level
-        levels.append(positives)
+        levels.append([
+            el for el in positives 
+                if el.support > 0 and (el.parent.level == -1 or accept_arrays[el.parent.level][0] > min_support)
+        ])
         # swap negative nodes list
-        negative_nodes = negatives
+        negative_nodes = [
+            el for el in negatives 
+                if el.support > 0 and (el.parent.level == -1 or accept_arrays[el.parent.level][1] > min_support)
+        ]
 
     return levels
+
+def compute_accept_array(current_item, positives, negatives):
+    accept_arrays = np.zeros((current_item, 2), dtype=float)
+   
+    for positive in positives:
+        level = positive.parent.level
+        if level > -1:
+            accept_arrays[level][0] += positive.support
+    for negative in negatives:
+        level = negative.parent.level
+        if level > -1:
+            accept_arrays[level][1] += positive.support
+    return accept_arrays
 
 def process_node(
         current_item: int,
@@ -111,10 +133,10 @@ def process_node(
         transactions: np.ndarray, 
         transaction_indices: np.ndarray, 
         transaction_ptrs: np.ndarray, 
-        shape: tuple[int,int], 
         next_parent: Parent):
-    
+    trx_count = transactions.shape[0]
     head, tail = [], []
+    
     for i in range(node.begin, node.end):
         # transaction index
         tid = transaction_indices[i]
@@ -137,14 +159,12 @@ def process_node(
 
     # next parent is current node if it's a match ( True ), else the node's parent
     # the positive node
-    positive_local_support = len(head) / (-node.begin + node.end)
-    negative_local_support = len(tail) / (-node.begin + node.end)
 
     positive = Node(
         parent=next_parent,
         begin=node.begin,
         end=node.begin + len(head),
-        support=len(head) / shape[0],
+        support=len(head) / trx_count,
         positive=True
     )
     # the negative node
@@ -152,13 +172,10 @@ def process_node(
         parent= next_parent,
         begin= node.begin + len(head),
         end= node.begin + len(head) + len(tail),
-        support= len(tail) / shape[0],
+        support= len(tail) / trx_count,
         positive=False
     )
-    return (
-        positive if positive_local_support > min_support else None,
-        negative if negative_local_support > min_support else None
-    )
+    return positive, negative
 
 def extract_fp(levels: list[list[Node]], header: dict[FrequentItem],*, dataset_size: float = 1.0, reverse_index: list[any] = None ):
     def get_ancestors(level: int,node: Node):
@@ -191,8 +208,8 @@ if __name__ == '__main__':
     import stuff
   
   
-    transactions = stuff.load_dummy()
-    min_support = .05
+    transactions = stuff.load_scontrini()
+    min_support = .0001
     header, reverse_index = extract_first(min_support, transactions)
     sorted = sort_records(transactions, header)
     levels = compute_lasagna(min_support, header, sorted)
@@ -204,6 +221,6 @@ if __name__ == '__main__':
         'c_nodes' : c_nodes, 
         'c_counter' : c_counter
     })
-    for i,level in enumerate(levels):
-        for leaf in level:
-            print('Level {}'.format(i), leaf)
+    #for i,level in enumerate(levels):
+    #    for leaf in level:
+    #        print('Level {}'.format(i), leaf)
