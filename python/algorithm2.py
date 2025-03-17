@@ -92,38 +92,42 @@ def fit_transactions(min_support: float,transactions: list[list[Hashable]], *,ma
         transactions_pointers
     )
    
-def process_partition(partition: Partition, depth: int, transaction_array: np.ndarray,transaction_indices: np.ndarray, transaction_pointers: np.ndarray):
+def process_partition(partition: Partition, depth: int, pad_memory: np.ndarray, transaction_array: np.ndarray,transaction_indices: np.ndarray, transaction_pointers: np.ndarray):
     transactions_count = transaction_array.shape[0]
-    head = []
-    tail = []
+    head = 0
+    tail = len(pad_memory)
     begin, end = partition.extents
+
     for i in range(begin, end):
         tid = transaction_indices[i]
         ptr = transaction_pointers[tid]
         if ptr > -1:
             trx = transaction_array[tid]
             if trx[ptr] == depth - 1:
-                head.append(tid)
+                pad_memory[head] = tid
+                head+=1
                 transaction_pointers[tid] = ptr - 1
             else:
-                tail.append(tid)
+                tail-=1
+                pad_memory[tail] = tid
 
     left = Partition(
         parent=partition if not partition.is_right() else partition.parent,
         partition_type=PartitionType.Left,
         depth=depth, 
-        support=len(head) / transactions_count, 
-        extents=(begin, begin + len(head))
+        support=head / transactions_count, 
+        extents=(begin, begin + head)
     )
     right = Partition(
         parent=partition if not partition.is_right() else partition.parent, 
         partition_type=PartitionType.Right,
         depth=depth, 
-        support=len(tail) / transactions_count, 
-        extents=(begin + len(head), begin + len(head) + len(tail))
+        support=tail / transactions_count, 
+        extents=(begin + head, begin + head + (transactions_count - tail))
     )
 
-    transaction_indices[begin: right.extents[1]] = head + tail
+    transaction_indices[0: head] = pad_memory[0:head]
+    transaction_indices[head:head + (transactions_count - tail) ] = pad_memory[tail: transactions_count]
     return left, right     
    
 def create_partitions_tree(min_support: float, transaction_array, transaction_indices, transaction_pointers, number_of_frequent_1items):
@@ -132,13 +136,18 @@ def create_partitions_tree(min_support: float, transaction_array, transaction_in
 
     right_partitions: list[Partition] = []
 
+    pad_memory = np.zeros(transaction_array.shape[0],dtype=np.int32)
     for depth in range(1,number_of_frequent_1items+1):
-
+        
         current_left_partitions: list[Partition] = []
         current_right_partitions: list[Partition] = []
 
-        for partition in depths[depth-1]+right_partitions:
-            left, right = process_partition(partition, depth, transaction_array, transaction_indices, transaction_pointers )
+        working_partitions = depths[depth-1]+right_partitions
+        if len(working_partitions) == 0:
+            break
+            
+        for partition in working_partitions:
+            left, right = process_partition(partition, depth,pad_memory , transaction_array, transaction_indices, transaction_pointers )
             current_left_partitions.append(left)
             current_right_partitions.append(right)
 
@@ -152,8 +161,8 @@ def create_partitions_tree(min_support: float, transaction_array, transaction_in
         for i in range(len(left_partitions)):
             left_partitions[i].index = i
         
-        print(f'depth {depth}:')
-        print(supports_per_depth)
+        # print(f'depth {depth}:')
+        # print(supports_per_depth)
         depths.append(left_partitions)
 
     return depths
