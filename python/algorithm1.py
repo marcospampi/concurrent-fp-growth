@@ -75,7 +75,7 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
     # the negative nodes
     negative_nodes = [] 
 
-
+    print(trx_buf)
     for current_item in range(num_of_frequent_1items):
         # the next nodes
         positives: list[Node] = []
@@ -86,7 +86,7 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
         
 
         for index, node in enumerate(current_nodes):
-            next_parent = node.parent if node.positive == False else Parent(current_item -1, index)
+            next_parent = node.parent if node.positive == False else Parent(current_item - 1, index)
 
             positive, negative = process_node(
                 current_item, 
@@ -98,33 +98,31 @@ def compute_lasagna(min_support: int, fi: dict[FrequentItem], transactions: list
             )
             positives.append(positive)
             negatives.append(negative)
+        print(trx_buf[:,trx_ptr][:,0])
 
-        accept_arrays = compute_accept_array(current_item, positives, negatives)
-        
+        accept_array = compute_accept_array(current_item, positives, negatives)
+        print('accept_array:', accept_array)
         # write back the next level
         levels.append([
             el for el in positives 
-                if el.support > 0 and (el.parent.level == -1 or accept_arrays[el.parent.level][0] > min_support)
+                if el.support > 0 and (el.parent.level == -1 or accept_array[el.parent.level] >= min_support)
         ])
         # swap negative nodes list
         negative_nodes = [
             el for el in negatives 
-                if el.support > 0 and (el.parent.level == -1 or accept_arrays[el.parent.level][1] > min_support)
+                if el.support > 0 and (el.parent.level == -1 or accept_array[el.parent.level] >= min_support)
         ]
 
     return levels
 
 def compute_accept_array(current_item, positives, negatives):
-    accept_arrays = np.zeros((current_item, 2), dtype=float)
+    accept_arrays = np.zeros(current_item + 1, dtype=float)
    
-    for positive in positives:
-        level = positive.parent.level
+    for el in positives + negatives:
+        level = el.parent.level
         if level > -1:
-            accept_arrays[level][0] += positive.support
-    for negative in negatives:
-        level = negative.parent.level
-        if level > -1:
-            accept_arrays[level][1] += positive.support
+            accept_arrays[level] += el.support
+
     return accept_arrays
 
 def process_node(
@@ -136,6 +134,7 @@ def process_node(
         next_parent: Parent):
     trx_count = transactions.shape[0]
     head, tail = [], []
+
     
     for i in range(node.begin, node.end):
         # transaction index
@@ -199,28 +198,30 @@ def extract_fp(levels: list[list[Node]], header: dict[FrequentItem],*, dataset_s
             ancestors = get_ancestors(i, node)
             for ancestor in ancestors:
                 c_counter += 1
-                # key = frozenset(ancestor)
-                # frequent_items[key] = (frequent_items[key] if key in frequent_items else 0) + node.support
-                #frequent_items.append((node.support, new_var))
-    return c_levels, c_nodes, c_counter  #pd.DataFrame(data=[ (support, itemsets) for itemsets, support in frequent_items.items()], columns=('support','itemsets'))
+                key = frozenset(ancestor)
+                frequent_items[key] = (frequent_items[key] if key in frequent_items else 0) + node.support
+                #frequent_items.append((node.support, key))
+    fi = pd.DataFrame(data=[ (support, itemsets) for itemsets, support in frequent_items.items()], columns=('support','itemsets'))
+    return fi, c_levels, c_nodes, c_counter  
 
 if __name__ == '__main__':
     import stuff
   
   
-    transactions = stuff.load_scontrini()
-    min_support = .0001
+    transactions = stuff.load_dummy()
+    min_support = .5
     header, reverse_index = extract_first(min_support, transactions)
     sorted = sort_records(transactions, header)
     levels = compute_lasagna(min_support, header, sorted)
     
-    #print(header)
-    c_levels, c_nodes, c_counter = extract_fp(levels,header, dataset_size=len(transactions), reverse_index = reverse_index)
+    print(header)
+    fi, c_levels, c_nodes, c_counter = extract_fp(levels,header, dataset_size=len(transactions), reverse_index = reverse_index)
+    print(fi)
     print({
         'c_levels' : c_levels, 
         'c_nodes' : c_nodes, 
         'c_counter' : c_counter
     })
-    #for i,level in enumerate(levels):
-    #    for leaf in level:
-    #        print('Level {}'.format(i), leaf)
+    for i,level in enumerate(levels):
+        for leaf in level:
+            print('Level {}'.format(i), leaf)
