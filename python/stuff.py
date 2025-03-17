@@ -9,7 +9,7 @@ def load_lines(file: TextIOWrapper, split_by: str ):
     result = []
     for line in file:
         try:   
-            trx = [ int(x) for x in line.split(split_by) ]
+            trx = [ int(x) for x in line.strip().split(split_by) ]
             if len(trx) > 0:
                 result.append(trx)
         except ValueError:
