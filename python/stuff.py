@@ -67,9 +67,19 @@ def load_pumsb():
         transactions = load_lines(file, ' ')
 
     return transactions
+
 def load_dummy():
     return [['Milk', 'Onion', 'Nutmeg', 'Kidney Beans', 'Eggs', 'Yogurt'],
            ['Dill', 'Onion', 'Nutmeg', 'Kidney Beans', 'Eggs', 'Yogurt'],
            ['Milk', 'Apple', 'Kidney Beans', 'Eggs'],
            ['Milk', 'Unicorn', 'Corn', 'Kidney Beans', 'Yogurt'],
            ['Corn', 'Onion', 'Onion', 'Kidney Beans', 'Ice cream', 'Eggs']]
+
+def load_pippo():
+    return [
+        ["f", "a", "c", "d", "g", "i", "m","p"],
+        ["a", "b", "c", "f", "l", "m", "o" ],
+        ["b", "f", "h", "j", "o"],
+        ["b", "c", "k", "s", "p" ],
+        ["a", "f", "c", "e", "l", "p", "m", "n"]
+    ]

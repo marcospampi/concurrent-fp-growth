@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import enum
-import json
 from typing import Hashable, Optional, Self
 import numpy as np
 import pandas as pd
@@ -23,6 +22,8 @@ class Partition:
     extents: tuple[int,int] = (0,0)
     support: float = 1.0
 
+    label: int = -1
+
     def is_left(self) -> bool:
         return self.partition_type == PartitionType.Left
     def is_right(self) -> bool:
@@ -37,7 +38,6 @@ class FrequentOneItem:
     item: any 
     label: int
     support: float
-    link: Optional[Partition] = None
 
 
 def extract_unique_items(min_support, transactions, max_support, number_of_transactions):
@@ -92,42 +92,54 @@ def fit_transactions(min_support: float,transactions: list[list[Hashable]], *,ma
         transactions_pointers
     )
    
-def process_partition(partition: Partition, depth: int, pad_memory: np.ndarray, transaction_array: np.ndarray,transaction_indices: np.ndarray, transaction_pointers: np.ndarray):
+def process_partition(
+        partition: Partition, 
+        depth: int, 
+        left_pad_memory: np.ndarray,
+        right_pad_memory: np.ndarray,
+        transaction_array: np.ndarray,
+        transaction_indices: np.ndarray,
+        transaction_pointers: np.ndarray
+    ):
     transactions_count = transaction_array.shape[0]
     head = 0
-    tail = len(pad_memory)
+    tail = 0
     begin, end = partition.extents
+
+    label = depth - 1 
 
     for i in range(begin, end):
         tid = transaction_indices[i]
         ptr = transaction_pointers[tid]
         if ptr > -1:
             trx = transaction_array[tid]
-            if trx[ptr] == depth - 1:
-                pad_memory[head] = tid
+            if trx[ptr] == label:
+                left_pad_memory[head] = tid
                 head+=1
                 transaction_pointers[tid] = ptr - 1
             else:
-                tail-=1
-                pad_memory[tail] = tid
+                right_pad_memory[tail] = tid
+                tail+=1
 
     left = Partition(
         parent=partition if not partition.is_right() else partition.parent,
         partition_type=PartitionType.Left,
         depth=depth, 
         support=head / transactions_count, 
-        extents=(begin, begin + head)
+        extents=(begin, begin + head),
+        label=label
     )
     right = Partition(
         parent=partition if not partition.is_right() else partition.parent, 
         partition_type=PartitionType.Right,
         depth=depth, 
         support=tail / transactions_count, 
-        extents=(begin + head, begin + head + (transactions_count - tail))
+        extents=(begin + head, begin + head + tail ),
+        label=(partition if not partition.is_right() else partition.parent).label
     )
 
-    transaction_indices[0: head] = pad_memory[0:head]
-    transaction_indices[head:head + (transactions_count - tail) ] = pad_memory[tail: transactions_count]
+    transaction_indices[begin: begin + head] = left_pad_memory[0:head]
+    transaction_indices[begin + head:begin + head + tail ] = right_pad_memory[0: tail]
     return left, right     
    
 def create_partitions_tree(min_support: float, transaction_array, transaction_indices, transaction_pointers, number_of_frequent_1items):
@@ -136,9 +148,14 @@ def create_partitions_tree(min_support: float, transaction_array, transaction_in
 
     right_partitions: list[Partition] = []
 
-    pad_memory = np.zeros(transaction_array.shape[0],dtype=np.int32)
+    left_pad_memory = np.zeros(transaction_array.shape[0],dtype=np.int32)
+    right_pad_memory = np.zeros(transaction_array.shape[0],dtype=np.int32)
+
+    supports = np.zeros(number_of_frequent_1items + 1, dtype=float)
+
     for depth in range(1,number_of_frequent_1items+1):
-        
+        if depth == 4:
+            depth = depth
         current_left_partitions: list[Partition] = []
         current_right_partitions: list[Partition] = []
 
@@ -147,16 +164,21 @@ def create_partitions_tree(min_support: float, transaction_array, transaction_in
             break
             
         for partition in working_partitions:
-            left, right = process_partition(partition, depth,pad_memory , transaction_array, transaction_indices, transaction_pointers )
+            left, right = process_partition(partition, depth,left_pad_memory, right_pad_memory , transaction_array, transaction_indices, transaction_pointers )
             current_left_partitions.append(left)
             current_right_partitions.append(right)
 
-        supports_per_depth = np.zeros(depth + 1)
-        for p in (current_left_partitions + current_right_partitions): 
-            supports_per_depth[p.depth if p.is_left() else p.parent.depth]+= p.support
-            
+
+        #supports[:]=0
+        #for p in current_left_partitions + current_right_partitions:
+        #    supports[p.depth if p.is_left() else p.parent.depth] += p.support
+        #print(supports)
+        #print('depth {}\tcumulative_support:{}'.format(depth, cumulative_support))
+        #if cumulative_support < min_support:
+        #    break
+        
         left_partitions = [p for p in current_left_partitions if not p.is_empty()]
-        right_partitions = [p for p in current_right_partitions if not p.is_empty() and supports_per_depth[p.parent.depth] > min_support]
+        right_partitions = [p for p in current_right_partitions if not p.is_empty()]
         
         for i in range(len(left_partitions)):
             left_partitions[i].index = i
@@ -175,15 +197,26 @@ def get_ancestors(partition: Partition):
             ancestors.append(ancestor.depth - 1)
     return ancestors
 
+def project_at_depth(tree: list[list[Partition]], depth: int, rv1):
+    itemsets: dict[frozenset, float] = dict()
+    for partition in tree[depth]:
+        path = []
+        support = partition.support
+        while partition and partition.partition_type != PartitionType.Root:
+            path.append(rv1[partition.label])
+            key = frozenset(path)
+            itemsets[key] = support + (itemsets[key] if key in itemsets else 0.0)
+            partition = partition.parent
+    return itemsets
+
 def compute_frequent_itemsets(min_support: float,transactions: list[list[Hashable]], *,max_support:float=1.0):
     frequent_one_items, transaction_array, transaction_indices, transaction_pointers = fit_transactions(min_support,transactions, max_support=max_support)
     reverse_f1i = [ item.item for item in frequent_one_items.values()]
     number_of_frequent_1items = len(frequent_one_items)
 
-    depths = create_partitions_tree(min_support,transaction_array, transaction_indices, transaction_pointers, number_of_frequent_1items)
+    tree = create_partitions_tree(min_support,transaction_array, transaction_indices, transaction_pointers, number_of_frequent_1items)
 
     
-    frequent_itemsets: dict[frozenset, float] = dict()
     #for item in range(number_of_frequent_1items):
     #    depth = item + 1
     #    partitions = depths[depth]
@@ -201,8 +234,8 @@ def compute_frequent_itemsets(min_support: float,transactions: list[list[Hashabl
     #    for itemset, support in local_frequent_itemsets.items():
     #        frequent_itemsets[itemset] = support + ( frequent_itemsets[itemset] if itemset in frequent_itemsets else 0.0)
 
-    
-    # for i, depth in enumerate(depths):
+    # 
+    # for i, depth in enumerate(tree):
     #     print(f"Depth {i}")
     #     if i > 0:
     #         label = i - 1
@@ -214,10 +247,18 @@ def compute_frequent_itemsets(min_support: float,transactions: list[list[Hashabl
     #     Extents: {partition.extents}
     #     Support: {partition.support}\n"""
     #         print(txt)
+    # itemsets = []
+    # for (k,s) in project_at_depth(tree,3, reverse_f1i).items():
+    #     itemsets.append([s,k])
+
+    #itemsets = []
+    #for d in range(1, len(tree)):
+    #    for (k,s) in project_at_depth(tree,d, reverse_f1i).items():
+    #        itemsets.append([s,k])
     # df = pd.DataFrame(
-    #     data=[ (s,i) for (i,s) in frequent_itemsets.items()],
-    #     columns=('support', 'itemset')
-    # )
+    #     columns=('support', 'itemset'),
+    #     data=itemsets
+    # ).sort_values(by='support', ascending=False)
     # return df
     pass
 
@@ -227,7 +268,7 @@ if __name__ == '__main__':
     import stuff
   
   
-    transactions = stuff.load_T10I4D100K()
+    transactions = stuff.load_retail()
     #print(transactions)
     print(compute_frequent_itemsets(.001, transactions))
 
