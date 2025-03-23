@@ -75,7 +75,7 @@ def fit_transactions(min_support: float,transactions: list[list[Hashable]], *,ma
     mapped_trxs = [
         sorted([ frequent_one_items[i].label for i in trx if i in frequent_one_items ], reverse=True) for trx in mapped_trxs
     ]
-    max_trx_size = max( len(trx) for trx in mapped_trxs )
+    max_trx_size = max([ len(trx) for trx in mapped_trxs ])
 
     transaction_array = np.zeros((number_of_transactions, max_trx_size), dtype=np.int32)
     transactions_indices = np.arange(number_of_transactions,dtype=np.int32)
@@ -227,7 +227,8 @@ if __name__ == '__main__':
     import stuff
   
   
-    transactions = stuff.load_scontrini()
+    transactions = stuff.load_T10I4D100K()
+    #print(transactions)
     print(compute_frequent_itemsets(.001, transactions))
 
     
