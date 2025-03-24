@@ -42,6 +42,7 @@ type FittedTransaction = list[int]
 class FrequentItemPreprocessor:
     min_support: float
     max_support: float
+    transactions_scale: float
     transactions_count: int
     number_of_frequent_one_items: int
     frequent_one_items: list[FrequentOneItem]
@@ -68,7 +69,7 @@ class FrequentItemPreprocessor:
             ) 
             for ( item, count ) in frequent_one_item_supports.items()
                 if  self.min_support <= (count / transactions_count) <= self.max_support 
-        ], reverse=True, key = lambda foi: (foi.support ) )
+        ], reverse=True, key = lambda foi: (foi.support , foi.item) )
         
         self.frequent_one_items_map = dict()
 
@@ -77,6 +78,7 @@ class FrequentItemPreprocessor:
             item_ref.label = label
             self.frequent_one_items_map[item_ref.item] = label
         self.transactions_count = transactions_count
+        self.transactions_scale = 1 / transactions_count
         self.number_of_frequent_one_items = len(self.frequent_one_items)
     
     def transform(self, transaction: Transaction) -> FittedTransaction:

@@ -5,6 +5,7 @@ from time import sleep
 from typing import Generic, Literal, Optional, Self, TypeVar
 
 import numpy as np
+import pandas as pd
 from misc import FittedTransaction, FrequentItemPreprocessor, Transaction
 
 
@@ -105,7 +106,7 @@ class FlatFPTree:
                     # create next node
                     self.split_right_edge(node,right, label, right_destination_label)
 
-                    return self.traverse_left(right, destination_label)
+                    return self.traverse_left(right, destination_label, parent=parent)
                 # label < right_destination_label
                 else:
                     while self.right(right) > 0 and self.label(self.right(right)) < right_destination_label:
@@ -126,7 +127,7 @@ class FlatFPTree:
         self.set_label(right, right_label)
 
     def traverse_left(self, node, destination_label, parent: Optional[int] = None):
-        parent = parent if parent else node
+        parent = parent if parent > -1 else node
         left = self.left(node)
         if left < 0:
             left = self.create_left(destination_label, parent)
@@ -139,10 +140,10 @@ class FlatFPTree:
     def add_transaction(self, transaction: Transaction):
         trx = self.fip.transform(transaction)
         if len(trx) < 1: return
-        print("adding transaction {}", self.fip.to_items(trx))
-        self.add_fitted_transaction(trx)
+        # print("adding transaction", self.fip.to_items(trx))
+        self.__add_fitted_transaction(trx)
      
-    def add_fitted_transaction(self, trx: FittedTransaction,*, count = 1):
+    def __add_fitted_transaction(self, trx: FittedTransaction,*, count = 1):
         node = self.labels[trx[0]][0]
         
         self.use(node, count)
@@ -151,59 +152,61 @@ class FlatFPTree:
             node = self.traverse(node, self.label(node), label, parent = node)
             self.use(node, count)
 
-    def extract_upwords_path(self, node: int):
+    def __extract_upwords_path(self, node: int, include = False):
         parent = self.parent(node)
-        visited = [self.label(node)]
+        visited = [self.label(node)] if include else []
         while parent > -1:
             visited.append(self.label(parent))
             parent = self.parent(parent)
         return list(reversed(visited))
 
-    def project(self, label: int):
-        tree = FlatFPTree(self.fip)
+    def __project_tree(self, label: int):
+        projected = FlatFPTree(self.fip)
         for node in self.labels[label]:
             support = self.counts(node)
-            trx = self.extract_upwords_path(node)
-            
+            trx = self.__extract_upwords_path(node)
             if len(trx) > 0:
-                print(self.fip.to_items(trx))
-                tree.add_fitted_transaction(trx, count = support )
-        #tree.prune_and_seal()
-        return tree, []
+                projected.__add_fitted_transaction(trx, count = support )
+        projected.__prune_less_than_minsup_nodes()
+        itemsets = projected.__projected_extract_itemsets(label)
+        return projected, itemsets
 
+    def __projected_extract_itemsets(self, label: int):
+        scale = self.fip.transactions_scale
+        itemsets = [
+            (self.fip.frequent_one_items[label].support,frozenset({label}))
+        ]
+        for nodes in self.labels:
+            for node in nodes:
+                prefix = self.__extract_upwords_path(node, include=True)
+                support = self.counts(node)
+                itemsets.append((support * scale,frozenset([label,*prefix])))
+        return itemsets
 
-    def prune_and_seal(self):
-        # return None
-        self.node_rights = None
-        self.node_lefts = None
-        self.node_types = None
+    def __prune_zero_support_nodes(self):
         self.labels = [
             [ node for node in nodes if self.node_counts[node] > 0] for nodes in self.labels
         ]
-        return None
 
-    def extract_patterns(self):
+    def __prune_less_than_minsup_nodes(self):
+        scale = self.fip.transactions_scale
+        min_support = self.fip.min_support
+        self.labels = [
+            [ node for node in nodes if self.counts(node) * scale > min_support] for nodes in self.labels
+        ]
+
+    def extract_itemsets(self):
+        self.__prune_zero_support_nodes()
+        itemsets = []
         for label in reversed(list(range(0, self.fip.number_of_frequent_one_items))):
-            print(self.fip.to_item(label))
-            projection = self
-
             depth = label
-            transactions = []
-            while depth > 0:
-                max_label = 0
-                projection, transactions_ = projection.project(depth)
-                for (trx, counts) in transactions_:
-                    support = counts / self.fip.transactions_count
-                    if len(trx) > 0 :
-                        max_label = max(max_label, trx[-1])
-                        # if support >= self.fip.min_support:
-                        transactions.append((trx, support))
-                depth = max_label
-                print([(self.fip.to_items(trx), sup) for trx,sup in transactions_])
-                
-        pass
 
-def create_tree(min_support: float, dataset: list[Transaction]):
+            _, itemsets_ = self.__project_tree(depth)
+            itemsets+=itemsets_
+                
+        return itemsets
+
+def fpgrowth(min_support: float, dataset: list[Transaction]):
     fip = FrequentItemPreprocessor(min_support)
     fip.fit(dataset)
     tree = FlatFPTree(fip)
@@ -211,16 +214,18 @@ def create_tree(min_support: float, dataset: list[Transaction]):
     for trx in dataset:
         tree.add_transaction(trx)
     print(tree.node_next)
-    #extract_patterns(flat_tree)
 
-    tree.prune_and_seal()
-    patterns = tree.extract_patterns()
-    return patterns
+    frequent_itemsets = tree.extract_itemsets()
+    
+    df = pd.DataFrame(data=frequent_itemsets, columns=('support', 'itemsets'))
+    df['itemsets'] = df['itemsets'].apply(lambda x: frozenset(fip.to_items(x)))
+    return df
 
 
 if __name__ == '__main__':
     import stuff
-    dataset = stuff.load_pippo()
+    dataset = stuff.load_dummy()
     
-    tree_ = create_tree(3/len(dataset), dataset)
+    result = fpgrowth(.5, dataset)
+    print(result)
 
