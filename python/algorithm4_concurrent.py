@@ -1,8 +1,9 @@
-
+import os
+import concurrent.futures
 from dataclasses import dataclass
 from enum import Enum
-from time import sleep
-from typing import Generic, Literal, Optional, Self, TypeVar
+
+from typing import Optional, Self
 
 import numpy as np
 import pandas as pd
@@ -160,7 +161,7 @@ class FlatFPTree:
             parent = self.parent(parent)
         return list(reversed(visited))
 
-    def __project_tree(self, label: int):
+    def project_tree(self, label: int):
         projected = FlatFPTree(self.fip)
         for node in self.labels[label]:
             support = self.counts(node)
@@ -169,7 +170,7 @@ class FlatFPTree:
                 projected.__add_fitted_transaction(trx, count = support )
         projected.__prune_less_than_minsup_nodes()
         itemsets = projected.__projected_extract_itemsets(label)
-        return projected, itemsets
+        return itemsets
 
     def __projected_extract_itemsets(self, label: int):
         scale = self.fip.transactions_scale
@@ -194,19 +195,41 @@ class FlatFPTree:
         self.labels = [
             [ node for node in nodes if self.counts(node) * scale > min_support] for nodes in self.labels
         ]
-
-    def extract_itemsets(self):
+    
+    def extract_itemsets(self, max_workers: int):
         self.__prune_zero_support_nodes()
         itemsets = []
-        for label in reversed(list(range(0, self.fip.number_of_frequent_one_items))):
-            depth = label
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker, initargs=tuple([self])) as executor:
 
-            _, itemsets_ = self.__project_tree(depth)
-            itemsets+=itemsets_
+
+
+
+            labels = np.arange(self.fip.number_of_frequent_one_items)
+            np.random.shuffle(labels)
+            grid = np.array_split(labels,max_workers)
+
+            futures = {
+                executor.submit(run_in_worker, list(labels))
+                for labels in grid
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                result = fut.result()
+                itemsets += (result)
                 
         return itemsets
+def init_worker(tree_: FlatFPTree):
+    global tree
+    tree = tree_
+def run_in_worker(labels: list[int]):
+    global tree
+    result = []
+    for label in labels:
+        result += tree.project_tree(label)
+    return result
 
-def fpgrowth(min_support: float, dataset: list[Transaction]):
+def fpgrowth(min_support: float, dataset: list[Transaction], max_workers = None):
+    max_workers = os.cpu_count() if max_workers is None else max_workers
+
     fip = FrequentItemPreprocessor(min_support)
     fip.fit(dataset)
     tree = FlatFPTree(fip)
@@ -214,7 +237,7 @@ def fpgrowth(min_support: float, dataset: list[Transaction]):
     for trx in dataset:
         tree.add_transaction(trx)
 
-    frequent_itemsets = tree.extract_itemsets()
+    frequent_itemsets = tree.extract_itemsets(max_workers)
     
     df = pd.DataFrame(data=frequent_itemsets, columns=('support', 'itemsets'))
     df['itemsets'] = df['itemsets'].apply(lambda x: frozenset(fip.to_items(x)))
