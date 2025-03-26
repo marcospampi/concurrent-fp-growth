@@ -22,7 +22,7 @@ def load_T10I4D100K():
     with open(file, 'r') as file:
         transactions = load_lines(file, ',')
     return transactions
-DATASETS_PATH = path.join(path.dirname(__file__),'../datasets/')
+
 
 def load_scontrini():
     file = DATASETS_PATH + "scontrini.nogit.csv"

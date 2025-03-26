@@ -7,7 +7,7 @@ from typing import Optional, Self
 
 import numpy as np
 import pandas as pd
-from misc import FittedTransaction, FrequentItemPreprocessor, Transaction
+from .FrequentItemPreprocessor import FittedTransaction, FrequentItemPreprocessor, Transaction
 
 
 @dataclass 
@@ -198,56 +198,39 @@ class FlatFPTree:
     
     def extract_itemsets(self, max_workers: int):
         self.__prune_zero_support_nodes()
+
+        if max_workers > 0:
+            return self.__extract_itemsets_mp(max_workers)
+        else:
+            return self.__extract_itemsets()
+
+    def __extract_itemsets(self):
         itemsets = []
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers, initializer=init_worker, initargs=tuple([self])) as executor:
-
-
-
-
+        for label in range(self.fip.number_of_frequent_one_items):
+            itemsets += self.project_tree(label)
+        return itemsets
+    def __extract_itemsets_mp(self, max_workers: int):
+        itemsets = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers, initializer=mp_init_worker, initargs=tuple([self])) as executor:
             labels = np.arange(self.fip.number_of_frequent_one_items)
             np.random.shuffle(labels)
             grid = np.array_split(labels,max_workers)
-
             futures = {
-                executor.submit(run_in_worker, list(labels))
+                executor.submit(mp_run, list(labels))
                 for labels in grid
             }
             for fut in concurrent.futures.as_completed(futures):
                 result = fut.result()
                 itemsets += (result)
-                
         return itemsets
-def init_worker(tree_: FlatFPTree):
+
+def mp_init_worker(tree_: FlatFPTree):
     global tree
     tree = tree_
-def run_in_worker(labels: list[int]):
+def mp_run(labels: list[int]):
     global tree
     result = []
     for label in labels:
         result += tree.project_tree(label)
     return result
-
-def fpgrowth(min_support: float, dataset: list[Transaction], max_workers = None):
-    max_workers = os.cpu_count() if max_workers is None else max_workers
-
-    fip = FrequentItemPreprocessor(min_support)
-    fip.fit(dataset)
-    tree = FlatFPTree(fip)
-    
-    for trx in dataset:
-        tree.add_transaction(trx)
-
-    frequent_itemsets = tree.extract_itemsets(max_workers)
-    
-    df = pd.DataFrame(data=frequent_itemsets, columns=('support', 'itemsets'))
-    df['itemsets'] = df['itemsets'].apply(lambda x: frozenset(fip.to_items(x)))
-    return df
-
-
-if __name__ == '__main__':
-    import stuff
-    dataset = stuff.load_T40I10D100K()
-    
-    result = fpgrowth(.001, dataset)
-    print(result)
 
