@@ -11,7 +11,9 @@ import os
 def fpgrowth_mp(min_support: float, dataset: list[Transaction], max_workers = None) -> pd.DataFrame:
     max_workers = os.cpu_count() if max_workers is None else max_workers
 
-    fip = FrequentItemPreprocessor(min_support)
+    dataset_len = len(dataset)
+    integer_min_support = int(dataset_len * min_support) + 1
+    fip = FrequentItemPreprocessor(integer_min_support)
     fip.fit(dataset)
     tree = FlatFPTree(fip)
 
@@ -21,7 +23,9 @@ def fpgrowth_mp(min_support: float, dataset: list[Transaction], max_workers = No
     frequent_itemsets = tree.extract_itemsets(max_workers)
 
     df = pd.DataFrame(data=frequent_itemsets, columns=('support', 'itemsets'))
-    df['itemsets'] = df['itemsets'].apply(lambda x: frozenset(fip.to_items(x)))
+    df['itemsets'] = df['itemsets'].apply(lambda trx: frozenset(fip.to_items(trx)))
+    df['support'] = df['support'].apply(lambda x: x / dataset_len)
+    df = df[df['support'] >= min_support]
     return df
 
 def fpgrowth(min_support: float, dataset: list[Transaction]) -> pd.DataFrame:
