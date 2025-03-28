@@ -7,9 +7,9 @@ from src.fpgrowth import fpgrowth_mp, fpgrowth
 
 if __name__ == '__main__':
     import scripts.datasets as datasets
-    dataset = datasets.load_T40I10D100K()
+    dataset = datasets.load_scontrini()
     
-    min_support = .01
+    min_support = .001
     # print(dataset)
 
-    print(fpgrowth_mp(min_support, dataset))
+    print(fpgrowth_mp(min_support, dataset, max_workers=8))

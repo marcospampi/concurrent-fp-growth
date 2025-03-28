@@ -62,5 +62,5 @@ for (name, loadfn, test_supports) in BENCHMARK_DATASETS:
     pd.DataFrame(
       columns=('dataset','min_support', 'algorithm', 'runtime'),
       data=results
-    ).to_csv('out.nogit.csv')
+    ).to_csv('docs/data/benchmarks.nogit.csv')
 
